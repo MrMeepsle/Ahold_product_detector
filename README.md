@@ -1,6 +1,9 @@
 # Ahold Product Detector
 This repository implements a product detector for products in the Albert Heijn supermarket. It is able to detect products using YoloV8 and track them using a Kalman Filter. 
 
+To run ROS with python, either a venv virtual environment or the conda or mamba package manager can be used. Specific instructions for these can be found below.
+<details>
+<summary>Venv Instructions</summary>
 
 ### Install this ROS Package for Ubuntu
 
@@ -48,11 +51,51 @@ If you want to rebuild the ROS package, you should first deactivate the python v
 deactivate
 catkin clean
 catkin build
+source devel/setup.bash
 ```
+
+</details>
+
+<details>
+<summary>Conda/Mamba Instructions</summary>
+
+### Install this ROS Package for Ubuntu
+
+Before starting install ROS Noetic in your conda environment, following the installation instructions [here](https://robostack.github.io/GettingStarted.html)
+
+After installation, initialize a workspace in order to build and run the ROS package. Do this by running the following commands:
+
+```console
+mkdir YOUR_WORKSPACE_NAME/src --parents
+cd YOUR_WORKSPACE_NAME
+conda activate [my_environment]
+catkin init
+```
+We want to have our ROS package inside the 'src' directory, so now that we are in here we can clone the repository:
+```console
+cd src
+git clone git@github.com:stijnla/Ahold_product_detector.git
+```
+
+Now we install the other dependencies for this conda environment used in the product detector package by using this command:
+
+```console
+cd Ahold_product_detector
+conda env update --file environment.yml --name [my_environment]
+```
+
+If you want to rebuild the ROS package you should clean the build directory and re-build the package. Run the following commands in the workspace directory to achieve this:
+```console
+conda activate [my_environment]
+catkin clean
+catkin build
+```
+
+</details>
 
 ### Run the code
 
-In order to run the code, make sure that the ROS environment is sourced, the ROS package is build and sourced, and that the python virtual environment is activated. Then run the following command with a realsense camera attached to your system:
+In order to run the code, make sure that the ROS package is built and sourced. Then run the following command with a realsense camera attached to your system:
 
 ```console
 roslaunch ahold_product_detection detect.launch
