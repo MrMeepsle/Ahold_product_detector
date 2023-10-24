@@ -101,6 +101,13 @@ In order to run the code, make sure that the ROS package is built and sourced. T
 roslaunch ahold_product_detection detect.launch
 ```
 
+For just debugging without a robot baseframe, use
+
+```console
+roslaunch ahold_product_detection detect_without_robot.launch
+```
+
+
 And run the following if only the detection nodes are necessary if you are using a robot for example:
 
 ```console

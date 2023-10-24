@@ -8,7 +8,6 @@ dependencies:
   - opencv
   - ultralytics
   - scipy
-  - ros-noetic-librealsense2
   - ros-noetic-realsense2-camera
   - ros-noetic-jsk-recognition-msgs
   - ros-noetic-pcl-conversions
