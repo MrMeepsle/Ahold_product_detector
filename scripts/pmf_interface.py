@@ -7,11 +7,10 @@ import torch
 import torch.nn.functional as F
 import torchvision
 from torch import nn
-from torchvision.transforms import transforms
 
 import pmf.models.vision_transformer as vit
 from pmf.models import ProtoNet
-from pmf_helpers import IMAGE_SIZE, PIL_IMAGE_TRANSFORM, pil_loader_rgb
+from pmf_helpers import IMAGE_LOADER, ImageLoader
 
 
 class StaticProtoNet(ProtoNet):
@@ -37,11 +36,11 @@ class StaticProtoNet(ProtoNet):
 
 
 class ProtoTypeLoader:
-    def __init__(self, feature_extractor: torch.nn, image_transform: transforms.Compose,
+    def __init__(self, feature_extractor: torch.nn, image_loader: ImageLoader,
                  prototype_dict: Optional[dict] = None,
                  path_to_dataset: Optional[Path] = None, ):
         self.feature_extractor = feature_extractor
-        self.image_transform = image_transform
+        self.image_loader = image_loader
         self.prototype_dict = prototype_dict
         if self.prototype_dict is None:
             self.prototype_dict = self.fill_prototype_dict(batch_size=150, path_to_dataset=path_to_dataset)
@@ -49,7 +48,8 @@ class ProtoTypeLoader:
     def load_prototypes(self, class_to_find: str, amount_of_prototypes: int = 5):
         prototype_dict = self.prototype_dict
         class_to_find_tensor = prototype_dict.pop(class_to_find)
-        other_prototypes_tensor = torch.empty(size=(len(prototype_dict), class_to_find_tensor.shape[0]),
+        class_to_find_tensor = class_to_find_tensor.view(-1, class_to_find_tensor.shape[0])
+        other_prototypes_tensor = torch.empty(size=(len(prototype_dict), class_to_find_tensor.shape[1]),
                                               dtype=torch.float, device="cuda:0", requires_grad=False)
         for i, key in enumerate(prototype_dict.keys()):
             other_prototypes_tensor[i] = prototype_dict[key]
@@ -58,8 +58,7 @@ class ProtoTypeLoader:
         class_similarity = cos(class_to_find_tensor, other_prototypes_tensor)
         _, top_indices = torch.topk(class_similarity, amount_of_prototypes - 1)
 
-        class_prototype_tensor = torch.cat((class_to_find_tensor.view(-1, class_to_find_tensor.shape[0]),
-                                            other_prototypes_tensor[top_indices]), dim=0)
+        class_prototype_tensor = torch.cat((class_to_find_tensor, other_prototypes_tensor[top_indices]), dim=0)
         classes = [class_to_find] + [list(prototype_dict.keys())[idx] for idx in top_indices.tolist()]
         return classes, class_prototype_tensor
 
@@ -73,17 +72,18 @@ class ProtoTypeLoader:
                 images = [image for image in class_path.iterdir() if image.is_file()]
                 images_feature_tensor = torch.empty(size=(len(images), 384),
                                                     dtype=torch.float, device="cuda:0", requires_grad=False)
-                single_image_tensor = torch.empty(size=(3, IMAGE_SIZE, IMAGE_SIZE), dtype=torch.float, device="cuda:0",
+                single_image_tensor = torch.empty(size=(3, self.image_loader.image_size, self.image_loader.image_size),
+                                                  dtype=torch.float, device="cuda:0",
                                                   requires_grad=False)
 
                 images_in = 0
                 while images:
                     image_batch, images = images[:batch_size], images[batch_size:]
-                    batch_image_tensor = torch.empty(size=(len(image_batch), 3, IMAGE_SIZE, IMAGE_SIZE),
-                                                     dtype=torch.float, device="cuda:0", requires_grad=False)
+                    batch_image_tensor = torch.empty(
+                        size=(len(image_batch), 3, self.image_loader.image_size, self.image_loader.image_size),
+                        dtype=torch.float, device="cuda:0", requires_grad=False)
                     for i, image in enumerate(image_batch):
-                        image = pil_loader_rgb(image)
-                        batch_image_tensor[i] = single_image_tensor.copy_(self.image_transform(image))
+                        batch_image_tensor[i] = single_image_tensor.copy_(self.image_loader(image))
 
                     _, C, H, W = batch_image_tensor.shape
                     with torch.no_grad():
@@ -96,18 +96,14 @@ class ProtoTypeLoader:
 
 
 class PMF:
-    def __init__(self, pmf_model_path: Path, image_transform: torchvision.transforms,
+    def __init__(self, pmf_model_path: Path, image_loader: ImageLoader,
                  path_to_dataset: Optional[Path] = None, reload_prototypes: bool = False):
         self.pmf_path = pmf_model_path
         pmf_dict = torch.load(self.pmf_path)
 
-        if 'transforms' not in pmf_dict:
+        if 'image_loader' not in pmf_dict or image_loader != pmf_dict['image_loader']:
             reload_prototypes = True
-        else:
-            for i, j in zip(pmf_dict['transforms'].transforms, image_transform.transforms):
-                if i.__dict__ != j.__dict__:
-                    reload_prototypes = True
-        self.image_transform = image_transform
+        self.image_loader = image_loader
 
         if "model" not in pmf_dict:
             raise Exception("Please provide path to a model")
@@ -117,12 +113,12 @@ class PMF:
         if "prototype_dict" not in pmf_dict or reload_prototypes is True:
             self.prototype_loader = ProtoTypeLoader(feature_extractor=self.protonet.backbone,
                                                     path_to_dataset=path_to_dataset,
-                                                    image_transform=self.image_transform)
+                                                    image_loader=self.image_loader)
             self.save_model_dict(self.pmf_path)
         else:
             self.prototype_loader = ProtoTypeLoader(feature_extractor=self.protonet.backbone,
                                                     prototype_dict=pmf_dict["prototype_dict"],
-                                                    image_transform=image_transform)
+                                                    image_loader=image_loader)
 
         self.class_list = None
 
@@ -130,7 +126,7 @@ class PMF:
         print("Saving prototype loader")
         dict_to_save = {"model": self.protonet.state_dict(),
                         "prototype_dict": self.prototype_loader.prototype_dict,
-                        "transforms": self.image_transform}
+                        "image_loader": self.image_loader}
         torch.save(dict_to_save, path)
 
     def predict(self, image_tensors, cutoff_accuracy, debug=False):
@@ -152,22 +148,23 @@ class PMF:
 
 
 def get_images(class_to_find: str, length: int, path_to_dataset: Path):
-    multi_image_tensor = torch.empty(size=(length, 3, IMAGE_SIZE, IMAGE_SIZE), dtype=torch.float, device="cuda:0",
+    multi_image_tensor = torch.empty(size=(length, 3, IMAGE_LOADER.image_size, IMAGE_LOADER.image_size),
+                                     dtype=torch.float, device="cuda:0",
                                      requires_grad=False)
-    single_image_tensor = torch.empty(size=(3, IMAGE_SIZE, IMAGE_SIZE), dtype=torch.float, device="cuda:0",
+    single_image_tensor = torch.empty(size=(3, IMAGE_LOADER.image_size, IMAGE_LOADER.image_size), dtype=torch.float,
+                                      device="cuda:0",
                                       requires_grad=False)
     path_to_class = path_to_dataset.joinpath(class_to_find)
     images = [image for image in path_to_class.iterdir() if image.is_file()][:length]
     for i, image in enumerate(images):
-        pil_image = pil_loader_rgb(image)
-        multi_image_tensor[i] = single_image_tensor.copy_(PIL_IMAGE_TRANSFORM(pil_image))
+        multi_image_tensor[i] = single_image_tensor.copy_(IMAGE_LOADER(image))
     return multi_image_tensor
 
 
 if __name__ == "__main__":
     dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set")
     protonet_model = Path(__file__).parent.parent.joinpath("models", "RP2K", "RP2KProtoNet.pth")
-    pmf = PMF(pmf_model_path=protonet_model, path_to_dataset=dataset_path, image_transform=PIL_IMAGE_TRANSFORM,
+    pmf = PMF(pmf_model_path=protonet_model, path_to_dataset=dataset_path, image_loader=IMAGE_LOADER,
               reload_prototypes=False)
     class_to_find = "13_AH_Terriyaki_Woksaus"
     pmf.set_class_to_find(class_to_find)
