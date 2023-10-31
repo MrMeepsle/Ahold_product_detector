@@ -1,9 +1,13 @@
+import time
 from pathlib import Path
+from typing import Optional
 
 import torch
 
 import torch.nn.functional as F
+import torchvision
 from torch import nn
+from torchvision.transforms import transforms
 
 import pmf.models.vision_transformer as vit
 from pmf.models import ProtoNet
@@ -11,10 +15,10 @@ from pmf_helpers import IMAGE_SIZE, PIL_IMAGE_TRANSFORM, pil_loader_rgb
 
 
 class StaticProtoNet(ProtoNet):
-    def __init__(self, path_to_model_weights: Path):
+    def __init__(self, model: dict):
         backbone = vit.__dict__['vit_small'](patch_size=16, num_classes=0)
         super().__init__(backbone)
-        super().load_state_dict(torch.load(path_to_model_weights)['model'])
+        super().load_state_dict(model)
 
         self.prototypes = None
 
@@ -33,46 +37,39 @@ class StaticProtoNet(ProtoNet):
 
 
 class ProtoTypeLoader():
-    def __init__(self, protonet_folder_path, feature_extractor, path_to_dataset=None):
-        self.protonet_folder_path = protonet_folder_path
+    def __init__(self, feature_extractor: torch.nn, image_transform: transforms.Compose,
+                 prototype_dict: Optional[dict] = None,
+                 path_to_dataset: Optional[Path] = None, ):
         self.feature_extractor = feature_extractor
-        self.path_to_dataset = path_to_dataset
+        self.image_transform = image_transform
+        self.prototype_dict = prototype_dict
+        if self.prototype_dict is None:
+            self.prototype_dict = self.fill_prototype_dict(batch_size=150, path_to_dataset=path_to_dataset)
 
-    def load_prototypes(self, class_to_find):
-        prototype_folder_path = self.protonet_folder_path.joinpath("prototypes")
-        if not prototype_folder_path.exists():
-            self._calculate_prototypes_to_prototype_folder(prototype_folder_path=prototype_folder_path, batch_size=150)
-        return self._load_prototypes_from_folder(prototype_folder_path=prototype_folder_path,
-                                                 class_to_find=class_to_find)
-
-    @staticmethod
-    def _load_prototypes_from_folder(prototype_folder_path: Path, class_to_find: str,
-                                     prototype_feature_size: int = 384, amount_of_prototypes: int = 5):
-        class_to_find_tensor = torch.load(prototype_folder_path.joinpath(class_to_find + ".pt"))
-        other_prototypes = [prototype_file for prototype_file in prototype_folder_path.iterdir() if
-                            prototype_file.is_file() and prototype_file.name != class_to_find + ".pt"]
-        other_prototypes_tensor = torch.empty(size=(len(other_prototypes), prototype_feature_size),
+    def load_prototypes(self, class_to_find: str, amount_of_prototypes: int = 5):
+        prototype_dict = self.prototype_dict
+        class_to_find_tensor = prototype_dict.pop(class_to_find)
+        other_prototypes_tensor = torch.empty(size=(len(prototype_dict), class_to_find_tensor.shape[0]),
                                               dtype=torch.float, device="cuda:0", requires_grad=False)
-        for i, class_ in enumerate(other_prototypes):
-            other_prototypes_tensor[i] = torch.load(class_)
+        for i, key in enumerate(prototype_dict.keys()):
+            other_prototypes_tensor[i] = prototype_dict[key]
 
         cos = nn.CosineSimilarity(dim=1, eps=1e-6)
         class_similarity = cos(class_to_find_tensor, other_prototypes_tensor)
         _, top_indices = torch.topk(class_similarity, amount_of_prototypes - 1)
 
-        prototype_tensor = torch.empty(size=(amount_of_prototypes, prototype_feature_size),
+        prototype_tensor = torch.empty(size=(amount_of_prototypes, class_to_find_tensor.shape[0]),
                                        dtype=torch.float, device="cuda:0", requires_grad=False)
         prototype_tensor[0] = class_to_find_tensor
         for i, other_prototype in enumerate(other_prototypes_tensor[top_indices]):
             prototype_tensor[i + 1] = other_prototype
-
         return prototype_tensor
 
-    def _calculate_prototypes_to_prototype_folder(self, prototype_folder_path, batch_size=150):
-        prototype_folder_path.mkdir(parents=True, exist_ok=False)
-        if not self.path_to_dataset.exists():
-            raise Exception("Cannot create Prototypes without a provided dataset path!!")
-        for class_path in self.path_to_dataset.iterdir():
+    def fill_prototype_dict(self, path_to_dataset, batch_size=150):
+        prototype_dict = {}
+        if not path_to_dataset.exists():
+            raise Exception("Please specify a valid path to dataset")
+        for class_path in path_to_dataset.iterdir():
             print("Processing:", class_path)
             if class_path.is_dir():
                 images = [image for image in class_path.iterdir() if image.is_file()]
@@ -88,33 +85,58 @@ class ProtoTypeLoader():
                                                      dtype=torch.float, device="cuda:0", requires_grad=False)
                     for i, image in enumerate(image_batch):
                         image = pil_loader_rgb(image)
-                        batch_image_tensor[i] = single_image_tensor.copy_(PIL_IMAGE_TRANSFORM(image))
+                        batch_image_tensor[i] = single_image_tensor.copy_(self.image_transform(image))
 
                     _, C, H, W = batch_image_tensor.shape
                     with torch.no_grad():
                         image_features = self.feature_extractor.forward(batch_image_tensor.view(-1, C, H, W))
                     images_feature_tensor[images_in:images_in + len(image_batch)] = image_features
                     images_in += len(image_batch)
-                prototypes = torch.mean(images_feature_tensor, dim=0)
-                torch.save(prototypes, prototype_folder_path.joinpath(class_path.name + ".pt"))
+                class_prototype = torch.mean(images_feature_tensor, dim=0)
+                prototype_dict[class_path.name] = class_prototype
+        return prototype_dict
 
 
 class PMF:
-    def __init__(self, protonet_folder_path: Path, path_to_dataset: Path):
-        self.protonet_folder_path = protonet_folder_path
-        model_files = list(self.protonet_folder_path.glob('*.pth'))
-        if len(model_files) != 1:
-            raise Exception("Please provide a directory with just one .pth file")
+    def __init__(self, pmf_model_path: Path, image_transform: torchvision.transforms,
+                 path_to_dataset: Optional[Path] = None):
+        self.pmf_path = pmf_model_path
+        pmf_dict = torch.load(self.pmf_path)
+        reload_prototypes = False
 
-        self.protonet = StaticProtoNet(path_to_model_weights=model_files[0])
+        if 'transforms' not in pmf_dict:
+            reload_prototypes = True
+        else:
+            for i, j in zip(pmf_dict['transforms'].transforms, image_transform.transforms):
+                if i.__dict__ != j.__dict__:
+                    reload_prototypes = True
+        self.image_transform = image_transform
+
+        if "model" not in pmf_dict:
+            raise Exception("Please provide path to a model")
+        self.protonet = StaticProtoNet(model=pmf_dict["model"])
         self.protonet.to("cuda:0")
-        self.prototype_loader = ProtoTypeLoader(protonet_folder_path=protonet_folder_path,
-                                                feature_extractor=self.protonet.backbone,
-                                                path_to_dataset=path_to_dataset)
 
-    def predict(self, images, cutoff_accuracy):
+        if "prototype_dict" not in pmf_dict or reload_prototypes is True:
+            self.prototype_loader = ProtoTypeLoader(feature_extractor=self.protonet.backbone,
+                                                    path_to_dataset=path_to_dataset,
+                                                    image_transform=self.image_transform)
+            self.save_model_dict(self.pmf_path)
+        else:
+            self.prototype_loader = ProtoTypeLoader(feature_extractor=self.protonet.backbone,
+                                                    prototype_dict=pmf_dict["prototype_dict"],
+                                                    image_transform=image_transform)
+
+    def save_model_dict(self, path: Path):
+        print("Saving prototype loader")
+        dict_to_save = {"model": self.protonet.state_dict(),
+                        "prototype_dict": self.prototype_loader.prototype_dict,
+                        "transforms": self.image_transform}
+        torch.save(dict_to_save, path)
+
+    def predict(self, image_tensors, cutoff_accuracy):
         with torch.no_grad():
-            image_features = self.protonet.backbone.forward(images)
+            image_features = self.protonet.backbone.forward(image_tensors)
             predictions = self.protonet.cos_classifier(image_features)
         values, indices = torch.max(predictions, dim=1)
         return torch.logical_and((values >= cutoff_accuracy), (indices == 0))
@@ -138,9 +160,9 @@ def get_images(class_to_find: str, length: int, path_to_dataset: Path):
 
 if __name__ == "__main__":
     dataset_path = Path(__file__).parent.parent.joinpath("data", "Mini-ImageNet", "test")
-    protonet_model_folder = Path(__file__).parent.parent.joinpath("models", "RP2K")
-    pmf = PMF(protonet_folder_path=protonet_model_folder, path_to_dataset=dataset_path)
+    protonet_model = Path(__file__).parent.parent.joinpath("models", "RP2K", "RP2KProtoNet.pth")
+    pmf = PMF(pmf_model_path=protonet_model, path_to_dataset=dataset_path, image_transform=PIL_IMAGE_TRANSFORM)
     class_to_find = "n02099601"
     pmf.set_class_to_find(class_to_find)
     images = get_images(class_to_find=class_to_find, path_to_dataset=dataset_path, length=5)
-    print(pmf.predict(images, cutoff_accuracy=0.6))
+    pmf.predict(images, cutoff_accuracy=0.6)
