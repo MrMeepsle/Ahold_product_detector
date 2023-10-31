@@ -58,12 +58,10 @@ class ProtoTypeLoader:
         class_similarity = cos(class_to_find_tensor, other_prototypes_tensor)
         _, top_indices = torch.topk(class_similarity, amount_of_prototypes - 1)
 
-        prototype_tensor = torch.empty(size=(amount_of_prototypes, class_to_find_tensor.shape[0]),
-                                       dtype=torch.float, device="cuda:0", requires_grad=False)
-        prototype_tensor[0] = class_to_find_tensor
-        for i, other_prototype in enumerate(other_prototypes_tensor[top_indices]):
-            prototype_tensor[i + 1] = other_prototype
-        return prototype_tensor
+        class_prototype_tensor = torch.cat((class_to_find_tensor.view(-1, class_to_find_tensor.shape[0]),
+                                            other_prototypes_tensor[top_indices]), dim=0)
+        classes = [class_to_find] + [list(prototype_dict.keys())[idx] for idx in top_indices.tolist()]
+        return classes, class_prototype_tensor
 
     def fill_prototype_dict(self, path_to_dataset, batch_size=150):
         prototype_dict = {}
@@ -126,6 +124,8 @@ class PMF:
                                                     prototype_dict=pmf_dict["prototype_dict"],
                                                     image_transform=image_transform)
 
+        self.class_list = None
+
     def save_model_dict(self, path: Path):
         print("Saving prototype loader")
         dict_to_save = {"model": self.protonet.state_dict(),
@@ -133,17 +133,22 @@ class PMF:
                         "transforms": self.image_transform}
         torch.save(dict_to_save, path)
 
-    def predict(self, image_tensors, cutoff_accuracy):
+    def predict(self, image_tensors, cutoff_accuracy, debug=False):
         with torch.no_grad():
             image_features = self.protonet.backbone.forward(image_tensors)
             predictions = self.protonet.cos_classifier(image_features)
         scores, indices = torch.max(predictions, dim=1)
-        prediction = torch.logical_and((scores >= cutoff_accuracy), (indices == 0))
-        scores[~prediction] = 0
-        return prediction, scores
+        if debug:
+            classes = [self.class_list[idx] if score >= cutoff_accuracy else "No Class" for idx, score in
+                       zip(indices, scores)]
+            scores[scores < cutoff_accuracy] = 0
+            return classes, scores
+        else:
+            return torch.logical_and((scores >= cutoff_accuracy), (indices == 0))
 
     def set_class_to_find(self, class_to_find):
-        self.protonet.update_prototypes(self.prototype_loader.load_prototypes(class_to_find))
+        self.class_list, class_prototypes = self.prototype_loader.load_prototypes(class_to_find)
+        self.protonet.update_prototypes(class_prototypes)
 
 
 def get_images(class_to_find: str, length: int, path_to_dataset: Path):
@@ -167,4 +172,5 @@ if __name__ == "__main__":
     class_to_find = "13_AH_Terriyaki_Woksaus"
     pmf.set_class_to_find(class_to_find)
     images = get_images(class_to_find="13_AH_Terriyaki_Woksaus", path_to_dataset=dataset_path, length=100)
-    print(pmf.predict(images, cutoff_accuracy=0.5)[0])
+    prediction = pmf.predict(images, cutoff_accuracy=0.5, debug=False)
+    print(prediction)
