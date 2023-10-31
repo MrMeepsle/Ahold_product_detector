@@ -36,7 +36,7 @@ class StaticProtoNet(ProtoNet):
             return cls_scores
 
 
-class ProtoTypeLoader():
+class ProtoTypeLoader:
     def __init__(self, feature_extractor: torch.nn, image_transform: transforms.Compose,
                  prototype_dict: Optional[dict] = None,
                  path_to_dataset: Optional[Path] = None, ):
@@ -99,10 +99,9 @@ class ProtoTypeLoader():
 
 class PMF:
     def __init__(self, pmf_model_path: Path, image_transform: torchvision.transforms,
-                 path_to_dataset: Optional[Path] = None):
+                 path_to_dataset: Optional[Path] = None, reload_prototypes: bool = False):
         self.pmf_path = pmf_model_path
         pmf_dict = torch.load(self.pmf_path)
-        reload_prototypes = False
 
         if 'transforms' not in pmf_dict:
             reload_prototypes = True
@@ -138,8 +137,10 @@ class PMF:
         with torch.no_grad():
             image_features = self.protonet.backbone.forward(image_tensors)
             predictions = self.protonet.cos_classifier(image_features)
-        values, indices = torch.max(predictions, dim=1)
-        return torch.logical_and((values >= cutoff_accuracy), (indices == 0))
+        scores, indices = torch.max(predictions, dim=1)
+        prediction = torch.logical_and((scores >= cutoff_accuracy), (indices == 0))
+        scores[~prediction] = 0
+        return prediction, scores
 
     def set_class_to_find(self, class_to_find):
         self.protonet.update_prototypes(self.prototype_loader.load_prototypes(class_to_find))
@@ -159,10 +160,11 @@ def get_images(class_to_find: str, length: int, path_to_dataset: Path):
 
 
 if __name__ == "__main__":
-    dataset_path = Path(__file__).parent.parent.joinpath("data", "Mini-ImageNet", "test")
+    dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set")
     protonet_model = Path(__file__).parent.parent.joinpath("models", "RP2K", "RP2KProtoNet.pth")
-    pmf = PMF(pmf_model_path=protonet_model, path_to_dataset=dataset_path, image_transform=PIL_IMAGE_TRANSFORM)
-    class_to_find = "n02099601"
+    pmf = PMF(pmf_model_path=protonet_model, path_to_dataset=dataset_path, image_transform=PIL_IMAGE_TRANSFORM,
+              reload_prototypes=False)
+    class_to_find = "13_AH_Terriyaki_Woksaus"
     pmf.set_class_to_find(class_to_find)
-    images = get_images(class_to_find=class_to_find, path_to_dataset=dataset_path, length=5)
-    pmf.predict(images, cutoff_accuracy=0.6)
+    images = get_images(class_to_find="13_AH_Terriyaki_Woksaus", path_to_dataset=dataset_path, length=100)
+    print(pmf.predict(images, cutoff_accuracy=0.5)[0])

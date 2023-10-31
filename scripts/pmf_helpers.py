@@ -13,8 +13,8 @@ def pil_loader_rgb(path_to_img: Path):
 # Dataset dependent values
 ##############################
 IMAGE_SIZE = 80
-MEAN_PIXEL_VALUES = [0.3528, 0.4193, 0.4640]
-STD_PIXEL_VALUES = [0.2542, 0.2605, 0.2740]
+MEAN_PIXEL_VALUES = [0.4314, 0.4189, 0.3903]
+STD_PIXEL_VALUES = [0.1910, 0.1809, 0.1889]
 PIL_IMAGE_TRANSFORM = transforms.Compose([
     transforms.Resize(size=(IMAGE_SIZE, IMAGE_SIZE), antialias=True),
     transforms.ToTensor(),
