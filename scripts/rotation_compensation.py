@@ -16,7 +16,7 @@ class RotationCompensation:
             "base_link", "camera_color_optical_frame", stamp
         )
         _, self.phi, _ = euler_from_quaternion(rot)
-        return rotate_image(img, -180 * self.phi / (np.pi))
+        return rotate_image(img, -180 * self.phi / (np.pi)), self.phi
 
     def rotate_bounding_boxes(self, boxes_xywh, image, phi=0):
         if hasattr(self, "phi"):
@@ -27,9 +27,9 @@ class RotationCompensation:
         rotated_boxes_xywh = rotate_bounding_boxes(boxes_xywh, image, angle)
 
         if hasattr(self, "phi"):
-            return rotated_boxes_xywh, self.phi
+            return rotated_boxes_xywh
         else:
-            return rotated_boxes_xywh, phi
+            return rotated_boxes_xywh
 
 
 def rotate_bounding_boxes(boxes_xywh, image, angle):

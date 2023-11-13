@@ -1,34 +1,75 @@
 from pathlib import Path
+from typing import Optional
 
+import PIL.Image
 import pyrealsense2 as rs
 import numpy as np
 import cv2
 import torch
 
+import PIL.Image as Image
+import torchvision
 import ultralytics
 from ultralytics.utils.plotting import Annotator
 
-from scripts.pmf_helpers import IMAGE_LOADER
+from scripts.pmf_data_helpers import IMAGE_LOADER
 from scripts.pmf_interface import PMF
+from torchvision.utils import save_image
 
 
-class PMFDetector:
-    def __init__(self, yolo_weights_path: Path, pmf_model_path: Path):
-        self.yolo_model = ultralytics.YOLO(yolo_weights_path)
-        self.classifier = PMF(pmf_model_path=pmf_model_path, image_loader=IMAGE_LOADER)
-        self.bounding_box_conf_threshold = 0.3
-        self.device = "cuda:0"
+class YoloHelper(ultralytics.YOLO):
+    def __init__(self, yolo_weights_path, bounding_box_conf_threshold, device):
+        super().__init__(yolo_weights_path)
+        self._device = device
+        if 0 <= bounding_box_conf_threshold < 1:
+            self.bounding_box_conf_threshold = bounding_box_conf_threshold
+        else:
+            raise Exception("No valid confidence threshold supplied")
 
-    def _plot_detection_results(self, frame, detection):
+    def predict(self, source=None, stream=False, predictor=None, **kwargs):
+        prediction = \
+            super().predict(source=source, stream=stream, predictor=predictor, device=self._device, **kwargs)[0]
+        bounding_boxes = prediction.boxes[prediction.boxes.conf > self.bounding_box_conf_threshold]
+        cropped_images = self._crop_img_with_bounding_boxes(source, bounding_boxes)
+        return cropped_images, bounding_boxes
+
+    @staticmethod
+    def _crop_img_with_bounding_boxes(image: Image, bounding_boxes: ultralytics.engine.results.Boxes):
+        """
+        Crop image with predicted bounding boxes
+        """
+        multi_image_tensor = torch.empty(
+            size=(len(bounding_boxes), 3, IMAGE_LOADER.image_size, IMAGE_LOADER.image_size),
+            dtype=torch.float, device="cuda:0",
+            requires_grad=False)
+        i = 0
+        for cx, cy, width, height in bounding_boxes.xywh:
+            cropped_image = image.crop(
+                (int(cx - width / 2), int(cy - height / 2), int(cx + width / 2), int(cy + height / 2)))
+            multi_image_tensor[i] = IMAGE_LOADER(cropped_image)
+            i += 1
+        return multi_image_tensor
+
+
+class ProductDetectorTest:
+    def __init__(self, yolo_weights_path: Path, pmf_model_path: Path, yolo_conf_threshold: float,
+                 pmf_conf_threshold: float, dataset_path: Optional[Path] = None, device: str = "cuda:0",
+                 reload_prototypes=False):
+        self.yolo_model = YoloHelper(yolo_weights_path, yolo_conf_threshold, device=device)
+        self.classifier = PMF(pmf_model_path, classification_confidence_threshold=pmf_conf_threshold,
+                              image_loader=IMAGE_LOADER, path_to_dataset=dataset_path, device=device,
+                              reload_prototypes=reload_prototypes)
+
+    @staticmethod
+    def _plot_detection_results(frame: PIL.Image.Image, bounding_boxes, scores, classes):
         """
         Plotting function for showing preliminary detection results for debugging
         """
-        annotator = Annotator(frame)
-        boxes = detection.boxes
-        for box in boxes:
+        annotator = Annotator(np.ascontiguousarray(np.asarray(frame)[:, :, ::-1]), font_size=6)
+        labels = [f"{class_} {score.item():.2f}" for class_, score in zip(classes, scores)]
+        for box, label in zip(bounding_boxes, labels):
             b = box.xyxy[0]  # get box coordinates in (top, left, bottom, right) format
-            c = box.cls
-            annotator.box_label(b, self.yolo_model.names[int(c)])
+            annotator.box_label(b, label)
 
         frame = annotator.result()
 
@@ -37,36 +78,15 @@ class PMFDetector:
         if key & 0xFF == ord('q') or key == 27:
             cv2.destroyAllWindows()
 
-    def _crop_img_with_bounding_boxes(self, image: np.ndarray, bounding_boxes: ultralytics.engine.results.Boxes):
-        """
-        Crop image with predicted bounding boxes
-        """
-        cropped_images = []
-        bounding_boxes = bounding_boxes[bounding_boxes.conf > self.bounding_box_conf_threshold]
-        multi_image_tensor = torch.empty(
-            size=(len(bounding_boxes), 3, IMAGE_LOADER.image_size, IMAGE_LOADER.image_size),
-            dtype=torch.float, device="cuda:0",
-            requires_grad=False)
-        i = 0
-        for cx, cy, width, height in bounding_boxes.xywh:
-            cropped_image = image[int(cy - height / 2):int(cy + height / 2),
-                            int(cx - width / 2):int(cx + width / 2)]
-            cropped_image = np.transpose(cropped_image, (2, 0, 1))
-            cropped_image = torch.from_numpy(cropped_image).to(self.device)
-            multi_image_tensor[i] = IMAGE_LOADER(cropped_image)
-            i += 1
-        return multi_image_tensor
-
-    def predict(self, color_image: np.ndarray, ros_visualize: bool = False):
-        prediction = self.yolo_model.predict(source=color_image, show=False, save=False, verbose=False,
-                                             device=self.device, agnostic_nms=True, stream=False)[0]
-        cropped_images = self._crop_img_with_bounding_boxes(color_image, prediction.boxes)
-        if ros_visualize:
-            self._plot_detection_results(frame=color_image, detection=prediction)
-        return self.classifier.predict(cropped_images, cutoff_accuracy=0.5)
+    def predict(self, color_image: PIL.Image.Image, debug: bool = False):
+        cropped_images, bounding_boxes = self.yolo_model.predict(source=color_image, show=False, save=False,
+                                                                 verbose=False, agnostic_nms=True, stream=False)
+        scores, classes = self.classifier(cropped_images, debug=debug)
+        self._plot_detection_results(frame=color_image, bounding_boxes=bounding_boxes, scores=scores, classes=classes)
+        return scores, classes
 
 
-DEVICE = False
+DEVICE = True
 if DEVICE:
     config = rs.config()
 
@@ -105,12 +125,15 @@ if DEVICE:
         if key & 0xFF == ord('q') or key == 27:
             cv2.destroyAllWindows()
             break
+    color_image = Image.fromarray(color_image[..., ::-1])
 else:
-    image_path = Path(__file__).parent.parent.joinpath("data", "Test_Shelves", "1.jpg")
-    color_image = np.asarray(cv2.imread(str(image_path)))
+    image_path = Path(__file__).parent.parent.joinpath("data", "Test_Shelves", "2.jpg")
+    color_image = Image.open(image_path).convert('RGB')
 
 yolo_weights = Path(__file__).parent.parent.joinpath("yolo_model", "just_products_best.pt")
-pmf_weights = Path(__file__).parent.parent.joinpath("models", "RP2K", "RP2KProtoNet.pth")
-detector = PMFDetector(yolo_weights_path=yolo_weights, pmf_model_path=pmf_weights)
+pmf_weights = Path(__file__).parent.parent.joinpath("models", "FullCustom", "force_harder.pth")
+dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set")
+detector = ProductDetectorTest(yolo_weights_path=yolo_weights, pmf_model_path=pmf_weights, dataset_path=dataset_path,
+                               yolo_conf_threshold=0.3, pmf_conf_threshold=0.5, reload_prototypes=False)
 detector.classifier.set_class_to_find("4_AH_Fijngesneden_Tomaten")
-print(detector.predict(color_image=color_image, ros_visualize=True))
+detector.predict(color_image=color_image, debug=False)

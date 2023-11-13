@@ -10,7 +10,7 @@ from torch import nn
 
 import pmf.models.vision_transformer as vit
 from pmf.models import ProtoNet
-from pmf_helpers import IMAGE_LOADER, ImageLoader
+from pmf_data_helpers import IMAGE_LOADER, ImageLoader
 
 
 class StaticProtoNet(ProtoNet):
@@ -38,9 +38,10 @@ class StaticProtoNet(ProtoNet):
 class ProtoTypeLoader:
     def __init__(self, feature_extractor: torch.nn, image_loader: ImageLoader,
                  prototype_dict: Optional[dict] = None,
-                 path_to_dataset: Optional[Path] = None, ):
+                 path_to_dataset: Optional[Path] = None, device: str = "cuda:0"):
         self.feature_extractor = feature_extractor
         self.image_loader = image_loader
+        self.device = device
         self.prototype_dict = prototype_dict
         if self.prototype_dict is None:
             self.prototype_dict = self.fill_prototype_dict(batch_size=150, path_to_dataset=path_to_dataset)
@@ -50,7 +51,7 @@ class ProtoTypeLoader:
         class_to_find_tensor = prototype_dict.pop(class_to_find)
         class_to_find_tensor = class_to_find_tensor.view(-1, class_to_find_tensor.shape[0])
         other_prototypes_tensor = torch.empty(size=(len(prototype_dict), class_to_find_tensor.shape[1]),
-                                              dtype=torch.float, device="cuda:0", requires_grad=False)
+                                              dtype=torch.float, device=self.device, requires_grad=False)
         for i, key in enumerate(prototype_dict.keys()):
             other_prototypes_tensor[i] = prototype_dict[key]
 
@@ -71,9 +72,9 @@ class ProtoTypeLoader:
             if class_path.is_dir():
                 images = [image for image in class_path.iterdir() if image.is_file()]
                 images_feature_tensor = torch.empty(size=(len(images), 384),
-                                                    dtype=torch.float, device="cuda:0", requires_grad=False)
+                                                    dtype=torch.float, device=self.device, requires_grad=False)
                 single_image_tensor = torch.empty(size=(3, self.image_loader.image_size, self.image_loader.image_size),
-                                                  dtype=torch.float, device="cuda:0",
+                                                  dtype=torch.float, device=self.device,
                                                   requires_grad=False)
 
                 images_in = 0
@@ -81,7 +82,7 @@ class ProtoTypeLoader:
                     image_batch, images = images[:batch_size], images[batch_size:]
                     batch_image_tensor = torch.empty(
                         size=(len(image_batch), 3, self.image_loader.image_size, self.image_loader.image_size),
-                        dtype=torch.float, device="cuda:0", requires_grad=False)
+                        dtype=torch.float, device=self.device, requires_grad=False)
                     for i, image in enumerate(image_batch):
                         batch_image_tensor[i] = single_image_tensor.copy_(self.image_loader(image))
 
@@ -96,78 +97,67 @@ class ProtoTypeLoader:
 
 
 class PMF:
-    def __init__(self, pmf_model_path: Path, image_loader: ImageLoader,
-                 path_to_dataset: Optional[Path] = None, reload_prototypes: bool = False):
+    def __init__(self, pmf_model_path: Path, image_loader: ImageLoader, classification_confidence_threshold: float,
+                 path_to_dataset: Optional[Path] = None, reload_prototypes: bool = False, device="cuda:0"):
         self.pmf_path = pmf_model_path
         pmf_dict = torch.load(self.pmf_path)
-
         if 'image_loader' not in pmf_dict or image_loader != pmf_dict['image_loader']:
             reload_prototypes = True
-        self.image_loader = image_loader
 
-        if "model" not in pmf_dict:
-            raise Exception("Please provide path to a model")
-        self.protonet = StaticProtoNet(model=pmf_dict["model"])
-        self.protonet.to("cuda:0")
+        self.image_loader = image_loader
+        self.device = device
+
+        if "yolo" not in pmf_dict:
+            raise Exception("Please provide path to a yolo")
+        self.protonet = StaticProtoNet(model=pmf_dict["yolo"])
+        self.protonet.to(self.device)
 
         if "prototype_dict" not in pmf_dict or reload_prototypes is True:
             self.prototype_loader = ProtoTypeLoader(feature_extractor=self.protonet.backbone,
                                                     path_to_dataset=path_to_dataset,
-                                                    image_loader=self.image_loader)
+                                                    image_loader=self.image_loader,
+                                                    device=self.device)
             self.save_model_dict(self.pmf_path)
         else:
             self.prototype_loader = ProtoTypeLoader(feature_extractor=self.protonet.backbone,
                                                     prototype_dict=pmf_dict["prototype_dict"],
-                                                    image_loader=image_loader)
+                                                    image_loader=image_loader,
+                                                    device=self.device)
 
         self.class_list = None
 
+        if 0 <= classification_confidence_threshold < 1:
+            self.clf_confidence_threshold = classification_confidence_threshold
+        else:
+            raise Exception("No valid confidence threshold supplied")
+
     def save_model_dict(self, path: Path):
         print("Saving prototype loader")
-        dict_to_save = {"model": self.protonet.state_dict(),
+        dict_to_save = {"yolo": self.protonet.state_dict(),
                         "prototype_dict": self.prototype_loader.prototype_dict,
                         "image_loader": self.image_loader}
         torch.save(dict_to_save, path)
 
-    def predict(self, image_tensors, cutoff_accuracy, debug=False):
+    def __call__(self, image_tensors: torch.Tensor, debug: bool = False):
         with torch.no_grad():
             image_features = self.protonet.backbone.forward(image_tensors)
             predictions = self.protonet.cos_classifier(image_features)
+        print(predictions)
+        print(self.class_list)
         scores, indices = torch.max(predictions, dim=1)
         if debug:
-            classes = [self.class_list[idx] if score >= cutoff_accuracy else "No Class" for idx, score in
+            classes = [self.class_list[idx] if score >= self.clf_confidence_threshold else "No Class" for idx, score in
                        zip(indices, scores)]
-            scores[scores < cutoff_accuracy] = 0
-            return classes, scores
+            scores[scores < self.clf_confidence_threshold] = 0
+            return scores, classes
         else:
-            return torch.logical_and((scores >= cutoff_accuracy), (indices == 0))
+            scores = torch.logical_and((scores >= self.clf_confidence_threshold), (indices == 0))
+            classes = [self.get_class_to_find() if score else "_" for score in scores.tolist()]
+            return scores, classes
 
     def set_class_to_find(self, class_to_find):
         self.class_list, class_prototypes = self.prototype_loader.load_prototypes(class_to_find)
         self.protonet.update_prototypes(class_prototypes)
 
-
-def get_images(class_to_find: str, length: int, path_to_dataset: Path):
-    multi_image_tensor = torch.empty(size=(length, 3, IMAGE_LOADER.image_size, IMAGE_LOADER.image_size),
-                                     dtype=torch.float, device="cuda:0",
-                                     requires_grad=False)
-    single_image_tensor = torch.empty(size=(3, IMAGE_LOADER.image_size, IMAGE_LOADER.image_size), dtype=torch.float,
-                                      device="cuda:0",
-                                      requires_grad=False)
-    path_to_class = path_to_dataset.joinpath(class_to_find)
-    images = [image for image in path_to_class.iterdir() if image.is_file()][:length]
-    for i, image in enumerate(images):
-        multi_image_tensor[i] = single_image_tensor.copy_(IMAGE_LOADER(image))
-    return multi_image_tensor
-
-
-if __name__ == "__main__":
-    dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set")
-    protonet_model = Path(__file__).parent.parent.joinpath("models", "RP2K", "RP2KProtoNet.pth")
-    pmf = PMF(pmf_model_path=protonet_model, path_to_dataset=dataset_path, image_loader=IMAGE_LOADER,
-              reload_prototypes=False)
-    class_to_find = "13_AH_Terriyaki_Woksaus"
-    pmf.set_class_to_find(class_to_find)
-    images = get_images(class_to_find="13_AH_Terriyaki_Woksaus", path_to_dataset=dataset_path, length=100)
-    prediction = pmf.predict(images, cutoff_accuracy=0.5, debug=False)
-    print(prediction)
+    def get_class_to_find(self):
+        return self.class_list[0] if self.class_list is not None else None
