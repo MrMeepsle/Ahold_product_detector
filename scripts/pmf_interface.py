@@ -107,9 +107,9 @@ class PMF:
         self.image_loader = image_loader
         self.device = device
 
-        if "yolo" not in pmf_dict:
-            raise Exception("Please provide path to a yolo")
-        self.protonet = StaticProtoNet(model=pmf_dict["yolo"])
+        if "model" not in pmf_dict:
+            raise Exception("Please provide path to a model")
+        self.protonet = StaticProtoNet(model=pmf_dict["model"])
         self.protonet.to(self.device)
 
         if "prototype_dict" not in pmf_dict or reload_prototypes is True:
@@ -133,7 +133,7 @@ class PMF:
 
     def save_model_dict(self, path: Path):
         print("Saving prototype loader")
-        dict_to_save = {"yolo": self.protonet.state_dict(),
+        dict_to_save = {"model": self.protonet.state_dict(),
                         "prototype_dict": self.prototype_loader.prototype_dict,
                         "image_loader": self.image_loader}
         torch.save(dict_to_save, path)
@@ -142,8 +142,6 @@ class PMF:
         with torch.no_grad():
             image_features = self.protonet.backbone.forward(image_tensors)
             predictions = self.protonet.cos_classifier(image_features)
-        print(predictions)
-        print(self.class_list)
         scores, indices = torch.max(predictions, dim=1)
         if debug:
             classes = [self.class_list[idx] if score >= self.clf_confidence_threshold else "No Class" for idx, score in

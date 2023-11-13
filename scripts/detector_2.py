@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 
+import PIL.Image
 import cv2
 import numpy as np
 import rospy
@@ -11,15 +12,15 @@ from ahold_product_detection.msg import Detection, RotatedBoundingBox
 from ahold_product_detection.srv import *
 from cv_bridge import CvBridge
 # message and service imports
+from std_msgs.msg import String
 from sensor_msgs.msg import Image, PointCloud2
 from ultralytics.utils.plotting import Annotator
 
 from opencv_helpers import RotatedRect
 from rotation_compensation import RotationCompensation, rotate_image
-from scripts.pmf_data_helpers import IMAGE_LOADER, ImageLoader, SEEN_COLOR, SEEN_CLASSES, UNSEEN_COLOR, UNSEEN_CLASSES, \
+from pmf_data_helpers import IMAGE_LOADER, ImageLoader, SEEN_COLOR, SEEN_CLASSES, UNSEEN_COLOR, UNSEEN_CLASSES, \
     DEFAULT_COLOR
-from scripts.pmf_interface import PMF
-
+from pmf_interface import PMF
 
 class YoloHelper(ultralytics.YOLO):
     def __init__(self, yolo_weights_path, bounding_box_conf_threshold, device, image_loader: ImageLoader):
@@ -38,7 +39,7 @@ class YoloHelper(ultralytics.YOLO):
         cropped_images = self._crop_img_with_bounding_boxes(source, bounding_boxes)
         return cropped_images, bounding_boxes
 
-    def _crop_img_with_bounding_boxes(self, image: Image, bounding_boxes: ultralytics.engine.results.Boxes):
+    def _crop_img_with_bounding_boxes(self, image: PIL.Image.Image, bounding_boxes: ultralytics.engine.results.Boxes):
         """
         Crop image with predicted bounding boxes
         """
@@ -109,8 +110,9 @@ class ProductDetector2:
 
         self.debug_clf = debug_clf
 
-        # Listen for classes to detect
+        self.class_sub = rospy.Subscriber("/detection_class", String, self.set_detection_class)
         self.detection_pub = rospy.Publisher("/detection_results2", Detection, queue_size=10)
+        self.visualization_pub = rospy.Publisher("/detection_vis", Image, queue_size=10)
 
     @staticmethod
     def _plot_detection_results(frame: Image, bounding_boxes, scores, classes, angle=None):
@@ -137,19 +139,19 @@ class ProductDetector2:
         return frame
 
     @staticmethod
-    def generate_detection_message(time_stamp, boxes, scores, labels, rgb_msg, depth_msg):
+    def generate_detection_message(time_stamp, boxes, scores, labels, rgb_msg, depth_msg) -> Detection:
         detection_msg = Detection()
         detection_msg.header.stamp = time_stamp
 
         bboxes_list = []
-        for bbox, label, score in zip(boxes, labels, scores):
+        for bbox, label, score in zip(boxes.xywh, labels, scores):
             bbox_msg = RotatedBoundingBox()
 
             bbox_msg.x = int(bbox[0])
             bbox_msg.y = int(bbox[1])
             bbox_msg.w = int(bbox[2])
             bbox_msg.h = int(bbox[3])
-            bbox_msg.label = int(label)
+            bbox_msg.label = label
             bbox_msg.score = score
 
             bboxes_list.append(bbox_msg)
@@ -160,6 +162,9 @@ class ProductDetector2:
 
         return detection_msg
 
+    def set_detection_class(self, class_to_find_msg):
+        self.classifier.set_class_to_find(class_to_find_msg.data)
+
     def run(self):
         if self.classifier.get_class_to_find() is not None:
             try:
@@ -169,22 +174,25 @@ class ProductDetector2:
                 return
 
             rgb_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
+            rgb_image = PIL.Image.fromarray(rgb_image[..., ::-1])  # Convert to PIL image
             if self.rotate:
                 rotated_image, angle = self.rotation_compensation.rotate_image(rgb_image, time_stamp)
                 cropped_images, bounding_boxes = self.yolo.predict(source=rotated_image, show=False, save=False,
-                                                                   verbose=False, device=0, agnostic_nms=True)
+                                                                   verbose=False, agnostic_nms=True)
                 bounding_boxes = self.rotation_compensation.rotate_bounding_boxes(bounding_boxes, rgb_image, angle)
                 scores, labels = self.classifier(cropped_images, debug=self.debug_clf)
                 if self.visualize_results:
-                    self._plot_detection_results(frame=rotated_image, bounding_boxes=bounding_boxes, scores=scores,
-                                                 classes=labels, angle=angle)
+                    result = self._plot_detection_results(frame=rotated_image, bounding_boxes=bounding_boxes,
+                                                          scores=scores, classes=labels, angle=angle)
+                    self.visualization_pub.publish(self.bridge.cv2_to_imgmsg(result))
             else:
                 cropped_images, bounding_boxes = self.yolo.predict(source=rgb_image, show=False, save=False,
-                                                                   verbose=False, device=0, agnostic_nms=True)
+                                                                   verbose=False, agnostic_nms=True)
                 scores, labels = self.classifier(cropped_images, debug=self.debug_clf)
                 if self.visualize_results:
-                    self._plot_detection_results(frame=rgb_image, bounding_boxes=bounding_boxes, scores=scores,
-                                                 classes=labels)
+                    result = self._plot_detection_results(frame=rgb_image, bounding_boxes=bounding_boxes, scores=scores,
+                                                          classes=labels)
+                    self.visualization_pub.publish(self.bridge.cv2_to_imgmsg(result))
 
             detection_results_msg = self.generate_detection_message(time_stamp=time_stamp, boxes=bounding_boxes,
                                                                     scores=scores, labels=labels, rgb_msg=rgb_msg,
@@ -193,22 +201,23 @@ class ProductDetector2:
 
 
 if __name__ == "__main__":
-    rospy.init_node("product_detector")
+    rospy.init_node("product_detector_2")
     yolo_weights_path = Path(__file__).parent.parent.joinpath("yolo_model", "just_products_best.pt")
-    pmf_weights_path = Path(__file__).parent.parent.joinpath("models", "FullCustom", "force_harder.pth")
+    pmf_weights_path = Path(__file__).parent.parent.joinpath("models", "FullCustom","force_harder.pth")
     DEBUG = True  # Flag for testing without robot attached
     if DEBUG:
-        dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set")
+        dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set_FULL")
         detector = ProductDetector2(rotate=False,
                                     yolo_weights_path=yolo_weights_path,
                                     yolo_conf_threshold=0.2,
                                     pmf_weights_path=pmf_weights_path,
-                                    pmf_conf_threshold=0.5,
+                                    pmf_conf_threshold=0.9,
                                     dataset_path=dataset_path,
                                     device="cuda:0",
                                     visualize_results=True,
-                                    reload_prototypes=False)
-        detector.classifier.set_class_to_find("4_AH_Fijngesneden_Tomaten")
+                                    reload_prototypes=False,
+                                    debug_clf=True)
+        detector.classifier.set_class_to_find("4_AH_Fijngesneden_Tomaten - 8718906697560")
     else:
         detector = ProductDetector2(yolo_weights_path=yolo_weights_path,
                                     yolo_conf_threshold=0.2,

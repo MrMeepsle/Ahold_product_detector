@@ -24,7 +24,7 @@ class ImageLoader:
         transforms = [
             v2.Resize(size=(self.image_size, self.image_size), antialias=True),
             v2.ToDtype(torch.float32, scale=True),
-            v2.Normalize(mean=self.mean_pixel_values, std=self.std_pixel_values),
+            # v2.Normalize(mean=self.mean_pixel_values, std=self.std_pixel_values),
         ]
         if isinstance(image, Path):
             transforms = [v2.ToImage()] + transforms

@@ -24,6 +24,7 @@ dependencies:
   - ros-noetic-jsk-recognition-msgs
   - ros-noetic-pcl-conversions
   - ros-noetic-pcl-ros
+  - ros-noetic-tf-conversions
   - pytorch==2.1.0=*cuda11.8*
   - torchvision>=0.15.0=*cu118
   - torchaudio=*=*cu118

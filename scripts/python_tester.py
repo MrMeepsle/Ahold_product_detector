@@ -66,7 +66,7 @@ class ProductDetectorTest:
         Plotting function for showing preliminary detection results for debugging
         """
         annotator = Annotator(np.ascontiguousarray(np.asarray(frame)[:, :, ::-1]), font_size=6)
-        labels = [f"{class_} {score.item():.2f}" for class_, score in zip(classes, scores)]
+        labels = [f"{class_[:10]} {score.item():.2f}" for class_, score in zip(classes, scores)]
         for box, label in zip(bounding_boxes, labels):
             b = box.xyxy[0]  # get box coordinates in (top, left, bottom, right) format
             annotator.box_label(b, label)
