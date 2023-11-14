@@ -24,7 +24,7 @@ class ImageLoader:
         transforms = [
             v2.Resize(size=(self.image_size, self.image_size), antialias=True),
             v2.ToDtype(torch.float32, scale=True),
-            # v2.Normalize(mean=self.mean_pixel_values, std=self.std_pixel_values),
+            v2.Normalize(mean=self.mean_pixel_values, std=self.std_pixel_values),
         ]
         if isinstance(image, Path):
             transforms = [v2.ToImage()] + transforms
@@ -88,7 +88,7 @@ SEEN_CLASSES = ['10_AH_Sesam_Woksaus - 8718907306744',
                 '9_AH_Rodekool - 8710400145981']
 SEEN_COLOR = (107, 191, 61)
 
-UNSEEN_CLASSES = ['1_AH_Brownies - 8718907400718'
+UNSEEN_CLASSES = ['1_AH_Brownies - 8718907400718',
                   '25_HAK_Bruine_Bonen - 8720600612848',
                   '2_AH_Cheesecake - 8718907457583',
                   '37_AH_Mini_Friet - 8718906948631',

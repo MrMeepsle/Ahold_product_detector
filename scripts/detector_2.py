@@ -22,6 +22,7 @@ from pmf_data_helpers import IMAGE_LOADER, ImageLoader, SEEN_COLOR, SEEN_CLASSES
     DEFAULT_COLOR
 from pmf_interface import PMF
 
+
 class YoloHelper(ultralytics.YOLO):
     def __init__(self, yolo_weights_path, bounding_box_conf_threshold, device, image_loader: ImageLoader):
         super().__init__(yolo_weights_path)
@@ -203,7 +204,7 @@ class ProductDetector2:
 if __name__ == "__main__":
     rospy.init_node("product_detector_2")
     yolo_weights_path = Path(__file__).parent.parent.joinpath("yolo_model", "just_products_best.pt")
-    pmf_weights_path = Path(__file__).parent.parent.joinpath("models", "FullCustom","force_harder.pth")
+    pmf_weights_path = Path(__file__).parent.parent.joinpath("models", "checkpoint.pth")
     DEBUG = True  # Flag for testing without robot attached
     if DEBUG:
         dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set_FULL")
@@ -211,13 +212,13 @@ if __name__ == "__main__":
                                     yolo_weights_path=yolo_weights_path,
                                     yolo_conf_threshold=0.2,
                                     pmf_weights_path=pmf_weights_path,
-                                    pmf_conf_threshold=0.9,
+                                    pmf_conf_threshold=0.65,
                                     dataset_path=dataset_path,
                                     device="cuda:0",
                                     visualize_results=True,
                                     reload_prototypes=False,
-                                    debug_clf=True)
-        detector.classifier.set_class_to_find("4_AH_Fijngesneden_Tomaten - 8718906697560")
+                                    debug_clf=False)
+        detector.classifier.set_class_to_find("25_HAK_Bruine_Bonen - 8720600612848")
     else:
         detector = ProductDetector2(yolo_weights_path=yolo_weights_path,
                                     yolo_conf_threshold=0.2,
