@@ -137,8 +137,8 @@ class ProductDetectorTest:
 
 image_path = Path(__file__).parent.joinpath("img1.png")
 color_image = Image.open(image_path).convert('RGB')
-yolo_weights = Path(__file__).parent.parent.joinpath("yolo_model", "just_products_best.pt")
-pmf_weights = Path(__file__).parent.parent.joinpath("models", "FullCustom", "force_harder.pth")
+yolo_weights = Path(__file__).parent.parent.joinpath("models", "YOLO_just_products.pt")
+pmf_weights = Path(__file__).parent.parent.joinpath("models", "PMF.pth")
 dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set_FULL")
 detector = ProductDetectorTest(yolo_weights_path=yolo_weights, pmf_model_path=pmf_weights, dataset_path=dataset_path,
                                yolo_conf_threshold=0.3, pmf_conf_threshold=0.5, reload_prototypes=False)

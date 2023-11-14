@@ -143,14 +143,14 @@ class PMF:
             image_features = self.protonet.backbone.forward(image_tensors)
             predictions = self.protonet.cos_classifier(image_features)
         scores, indices = torch.max(predictions, dim=1)
+        scores[scores < self.clf_confidence_threshold] = 0
         if debug:
             classes = [self.class_list[idx] if score >= self.clf_confidence_threshold else "No Class" for idx, score in
                        zip(indices, scores)]
-            scores[scores < self.clf_confidence_threshold] = 0
             return scores, classes
         else:
-            scores = torch.logical_and((scores >= self.clf_confidence_threshold), (indices == 0))
-            classes = [self.get_class_to_find() if score else "_" for score in scores.tolist()]
+            scores[indices != 0] = 0
+            classes = [self.get_class_to_find() if score != 0 else "_" for score in scores.tolist()]
             return scores, classes
 
     def set_class_to_find(self, class_to_find):

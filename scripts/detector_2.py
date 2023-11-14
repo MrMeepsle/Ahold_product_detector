@@ -121,7 +121,8 @@ class ProductDetector2:
         Plotting function for showing preliminary detection results for debugging
         """
         annotator = Annotator(np.ascontiguousarray(np.asarray(frame)[:, :, ::-1]), font_size=6)
-        labels = [f"{class_[:10]}... {score.item():.2f}" for class_, score in zip(classes, scores)]
+        labels = [f"{class_[:10]}... {score.item():.2f}" if score != 0 else f"{class_}" for class_, score in
+                  zip(classes, scores)]
         # Color bounding boxes based on if they are seen/unseen
         colors = [SEEN_COLOR if class_ in SEEN_CLASSES else UNSEEN_COLOR if class_ in UNSEEN_CLASSES else DEFAULT_COLOR
                   for class_ in classes]
@@ -203,8 +204,8 @@ class ProductDetector2:
 
 if __name__ == "__main__":
     rospy.init_node("product_detector_2")
-    yolo_weights_path = Path(__file__).parent.parent.joinpath("yolo_model", "just_products_best.pt")
-    pmf_weights_path = Path(__file__).parent.parent.joinpath("models", "checkpoint.pth")
+    yolo_weights_path = Path(__file__).parent.parent.joinpath("models", "YOLO_just_products.pt")
+    pmf_weights_path = Path(__file__).parent.parent.joinpath("models", "PMF.pth")
     DEBUG = True  # Flag for testing without robot attached
     if DEBUG:
         dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set_FULL")
