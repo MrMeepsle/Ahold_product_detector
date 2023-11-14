@@ -61,14 +61,21 @@ source devel/setup.bash
 
 ### Install this ROS Package for Ubuntu
 
-Before starting install ROS Noetic in your conda environment, following the installation instructions [here](https://robostack.github.io/GettingStarted.html)
+Install a conda build of ROS and the dependencies for this product detector package by using this command:
+
+```console
+mkdir YOUR_WORKSPACE_NAME/src --parents
+cd YOUR_WORKSPACE_NAME/src
+git clone git@github.com:stijnla/Ahold_product_detector.git
+cd Ahold_product_detector
+conda env create -f environment.yml 
+```
 
 After installation, initialize a workspace in order to build and run the ROS package. Do this by running the following commands:
 
 ```console
-mkdir YOUR_WORKSPACE_NAME/src --parents
 cd YOUR_WORKSPACE_NAME
-conda activate [my_environment]
+conda activate ros_env
 catkin init
 ```
 We want to have our ROS package inside the 'src' directory, so now that we are in here we can clone the repository:
@@ -77,16 +84,9 @@ cd src
 git clone git@github.com:stijnla/Ahold_product_detector.git
 ```
 
-Now we install the other dependencies for this conda environment used in the product detector package by using this command:
-
-```console
-cd Ahold_product_detector
-conda env update --file environment.yml --name [my_environment]
-```
-
 If you want to rebuild the ROS package you should clean the build directory and re-build the package. Run the following commands in the workspace directory to achieve this:
 ```console
-conda activate [my_environment]
+conda activate ros_env
 catkin clean
 catkin build
 ```
