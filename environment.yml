@@ -20,6 +20,7 @@ dependencies:
   - scipy
   - timm
   - ml-collections
+  - ros-noetic-desktop
   - ros-noetic-realsense2-camera
   - ros-noetic-jsk-recognition-msgs
   - ros-noetic-pcl-conversions

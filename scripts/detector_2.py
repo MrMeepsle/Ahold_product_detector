@@ -116,7 +116,7 @@ class ProductDetector2:
         self.visualization_pub = rospy.Publisher("/detection_vis", Image, queue_size=10)
 
     @staticmethod
-    def _plot_detection_results(frame: Image, bounding_boxes, scores, classes, angle=None):
+    def _plot_detection_results(frame: Image, bounding_boxes, scores, classes, angle=None, show_cv2=False):
         """
         Plotting function for showing preliminary detection results for debugging
         """
@@ -135,8 +135,9 @@ class ProductDetector2:
         if angle is not None:  # If detection is on rotated image
             frame = rotate_image(frame, 180 * angle / np.pi)
 
-        cv2.imshow("Result", frame)
-        cv2.waitKey(1)
+        if show_cv2:
+            cv2.imshow("Result", frame)
+            cv2.waitKey(1)
 
         return frame
 
@@ -206,7 +207,7 @@ if __name__ == "__main__":
     rospy.init_node("product_detector_2")
     yolo_weights_path = Path(__file__).parent.parent.joinpath("models", "YOLO_just_products.pt")
     pmf_weights_path = Path(__file__).parent.parent.joinpath("models", "PMF.pth")
-    DEBUG = True  # Flag for testing without robot attached
+    DEBUG = False  # Flag for testing without robot attached
     if DEBUG:
         dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set_FULL")
         detector = ProductDetector2(rotate=False,
@@ -219,13 +220,14 @@ if __name__ == "__main__":
                                     visualize_results=True,
                                     reload_prototypes=False,
                                     debug_clf=False)
-        detector.classifier.set_class_to_find("25_HAK_Bruine_Bonen - 8720600612848")
+        detector.classifier.set_class_to_find("5_AH_Halfvolle_Melk - 8718907056274")
     else:
         detector = ProductDetector2(yolo_weights_path=yolo_weights_path,
                                     yolo_conf_threshold=0.2,
                                     pmf_weights_path=pmf_weights_path,
-                                    pmf_conf_threshold=0.5,
-                                    device="cuda:0")
+                                    pmf_conf_threshold=0.65,
+                                    device="cuda:0",
+                                    visualize_results=True)
     while not rospy.is_shutdown():
         detector.run()
         detector.rate.sleep()
