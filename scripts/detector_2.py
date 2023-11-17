@@ -149,7 +149,7 @@ class ProductDetector2:
             self._currently_recording = False
 
     @staticmethod
-    def _plot_detection_results(frame: Image, bounding_boxes, scores, classes, angle=None, show_cv2=False):
+    def _plot_detection_results(frame: Image, bounding_boxes, scores, classes, angle=None, show_cv2=True):
         """
         Plotting function for showing preliminary detection results for debugging
         """
@@ -169,7 +169,9 @@ class ProductDetector2:
             frame = rotate_image(frame, 180 * angle / np.pi)
 
         if show_cv2:
-            cv2.imshow("Result", frame)
+            cv2.namedWindow("image", cv2.WND_PROP_FULLSCREEN)
+            cv2.setWindowProperty("image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+            cv2.imshow("image", frame)
             cv2.waitKey(1)
 
         return frame
@@ -221,6 +223,7 @@ class ProductDetector2:
 
             rgb_image = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
             rgb_image = PIL.Image.fromarray(rgb_image[..., ::-1])  # Convert to PIL image
+            ### TODO: check out why this goes wrong
             if self.rotate:
                 rotated_image, angle = self.rotation_compensation.rotate_image(rgb_image, time_stamp)
                 cropped_images, bounding_boxes = self.yolo.predict(source=rotated_image, show=False, save=False,
@@ -250,7 +253,7 @@ if __name__ == "__main__":
     rospy.init_node("product_detector_2")
     yolo_weights_path = Path(__file__).parent.parent.joinpath("models", "YOLO_just_products.pt")
     pmf_weights_path = Path(__file__).parent.parent.joinpath("models", "PMF.pth")
-    DEBUG = False  # Flag for testing without robot attached
+    DEBUG = True  # Flag for testing without robot attached
     if DEBUG:
         dataset_path = Path(__file__).parent.parent.joinpath("data", "Custom-Set_FULL")
         detector = ProductDetector2(rotate=False,
@@ -263,7 +266,7 @@ if __name__ == "__main__":
                                     visualize_results=True,
                                     reload_prototypes=False,
                                     debug_clf=False)
-        # detector.classifier.set_class_to_find("5_AH_Halfvolle_Melk - 8718907056274")
+        # detector.classifier.set_class_to_find("23_Conimex_Kip_Kerrie_Madras - 8714100795699")
     else:
         detector = ProductDetector2(yolo_weights_path=yolo_weights_path,
                                     yolo_conf_threshold=0.2,

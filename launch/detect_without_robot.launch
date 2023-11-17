@@ -16,4 +16,5 @@
   </include>
 
   <node name="product_detector" pkg="ahold_product_detection" type="detector_2.py" output="screen"/>
+  <node name="scanner_node" pkg="ahold_product_detection" type="scanner_node.py" output="screen"/>
 </launch>
